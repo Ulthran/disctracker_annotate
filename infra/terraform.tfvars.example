@@ -1,0 +1,7 @@
+bucket_name            = "disctracker-annotate-spa"
+index_document_source  = "../frontend/dist/index.html"
+error_document         = "index.html"
+tags = {
+  Project = "disctracker-annotate"
+  Env     = "dev"
+}

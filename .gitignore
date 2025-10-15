@@ -1,0 +1,16 @@
+# Node / Vite
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+*.log
+
+# Terraform
+.terraform/
+.terraform.*
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+
+# General
+.DS_Store
