@@ -39,8 +39,12 @@ resource "aws_s3_bucket_public_access_block" "spa" {
   restrict_public_buckets = true
 }
 
-resource "aws_cloudfront_origin_access_identity" "spa" {
-  comment = "OAI for disctracker-annotate SPA"
+resource "aws_cloudfront_origin_access_control" "spa" {
+  name                              = "disctracker-annotate-spa"
+  description                       = "OAC for disctracker-annotate SPA"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
 }
 
 data "aws_iam_policy_document" "spa_bucket_policy" {
@@ -54,8 +58,14 @@ data "aws_iam_policy_document" "spa_bucket_policy" {
     ]
 
     principals {
-      type        = "AWS"
-      identifiers = [aws_cloudfront_origin_access_identity.spa.iam_arn]
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.spa.arn]
     }
   }
 }
@@ -78,22 +88,18 @@ resource "aws_cloudfront_distribution" "spa" {
     origin_id   = "spa-s3-origin"
 
     s3_origin_config {
-      origin_access_identity = aws_cloudfront_origin_access_identity.spa.cloudfront_access_identity_path
+      origin_access_identity = ""
     }
+
+    origin_access_control_id = aws_cloudfront_origin_access_control.spa.id
   }
 
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS"]
     cached_methods   = ["GET", "HEAD"]
     target_origin_id = "spa-s3-origin"
-
-    forwarded_values {
-      query_string = false
-
-      cookies {
-        forward = "none"
-      }
-    }
+    cache_policy_id   = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+    origin_request_policy_id = "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
 
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
