@@ -35,7 +35,7 @@ terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 ```
 
-Make sure the `index_document_source` path in your `terraform.tfvars` points at the freshly built `frontend/dist/index.html` file.
+Make sure the `index_document_source` path in your `terraform.tfvars` points at the freshly built `frontend/dist/index.html` file and set `asset_directory` to the `frontend/dist` folder so that every generated asset is uploaded alongside the HTML shell.
 
 ## Next steps & recommendations
 

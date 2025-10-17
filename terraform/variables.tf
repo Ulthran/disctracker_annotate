@@ -26,6 +26,11 @@ variable "index_document_source" {
   type        = string
 }
 
+variable "asset_directory" {
+  description = "Path to the directory containing the built SPA assets that should be uploaded to S3."
+  type        = string
+}
+
 variable "price_class" {
   description = "CloudFront price class to control edge locations."
   type        = string

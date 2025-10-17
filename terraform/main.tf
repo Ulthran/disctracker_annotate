@@ -65,7 +65,26 @@ resource "aws_s3_bucket_policy" "spa" {
 }
 
 locals {
+  asset_directory    = abspath(var.asset_directory)
+  asset_files        = [for file in fileset(local.asset_directory, "**") : file if file != var.index_document]
   default_error_page = var.error_document != null ? var.error_document : var.index_document
+
+  content_type_map = {
+    css  = "text/css"
+    gif  = "image/gif"
+    html = "text/html"
+    ico  = "image/x-icon"
+    jpg  = "image/jpeg"
+    jpeg = "image/jpeg"
+    js   = "application/javascript"
+    json = "application/json"
+    map  = "application/json"
+    png  = "image/png"
+    svg  = "image/svg+xml"
+    txt  = "text/plain"
+    webmanifest = "application/manifest+json"
+    xml  = "application/xml"
+  }
 }
 
 resource "aws_cloudfront_distribution" "spa" {
@@ -125,4 +144,19 @@ resource "aws_s3_object" "spa_index" {
   source       = var.index_document_source
 
   etag = filemd5(var.index_document_source)
+}
+
+resource "aws_s3_object" "spa_assets" {
+  for_each = { for file in local.asset_files : file => file }
+
+  bucket = aws_s3_bucket.spa.id
+  key    = each.key
+  source = "${local.asset_directory}/${each.value}"
+  etag   = filemd5("${local.asset_directory}/${each.value}")
+
+  content_type = lookup(
+    local.content_type_map,
+    element(reverse(split(".", lower(each.value))), 0),
+    "application/octet-stream"
+  )
 }
