@@ -1,13 +1,27 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const docIframeRef = ref<HTMLIFrameElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
 let player: YT.Player | null = null
 
-const GOOGLE_DOC_URL =
-  'https://docs.google.com/document/d/e/2PACX-1vS3SXIULICwhf66A1VpzwuNFuIBqmoeZaZX6mE6xPD58Ll35H5TADaBrZEcD3xKq3TSe0sjjXNMTvFy/pub?embedded=true'
-const YOUTUBE_VIDEO_ID = 'dQw4w9WgXcQ'
+type YouTubeLinkInfo = {
+  videoId: string
+  startSeconds: number
+}
+
+const DEFAULT_DOC_URL =
+  'https://docs.google.com/document/d/1-RxEnSPYk5Nt6QIzDxjhDam1ktuj9t8HTTmTtGm_v3k/edit?tab=t.0'
+const DEFAULT_VIDEO_URL =
+  'https://www.youtube.com/watch?v=QQlyrXdStK0&t=831s&pp=ygUQdWx0aW1hdGUgZnJpc2JlZQ%3D%3D'
+
+const docUrl = ref(DEFAULT_DOC_URL)
+const docUrlInput = ref(DEFAULT_DOC_URL)
+
+const currentVideoId = ref('QQlyrXdStK0')
+const currentVideoStartSeconds = ref(831)
+const videoUrlInput = ref(DEFAULT_VIDEO_URL)
+const playerReady = ref(false)
 
 function loadYouTubeAPI() {
   return new Promise<void>((resolve) => {
@@ -32,6 +46,10 @@ function initYouTubePlayer() {
 
   player = new YT.Player(youtubeIframeRef.value, {
     events: {
+      onReady: () => {
+        playerReady.value = true
+        cueOrLoadVideo(false)
+      },
       onStateChange: (event: YT.OnStateChangeEvent) => {
         if (event.data === YT.PlayerState.PAUSED) {
           copyTimestampToClipboard()
@@ -61,27 +79,146 @@ async function copyTimestampToClipboard() {
   }
 }
 
-function focusIframe(iframeRef: typeof docIframeRef) {
-  const iframe = iframeRef.value
-  if (!iframe) return
+function focusArea(target: 'doc' | 'video') {
+  if (target === 'doc') {
+    const iframe = docIframeRef.value
+    if (!iframe) return
 
-  iframe.focus()
-  try {
-    iframe.contentWindow?.focus()
-  } catch (error) {
-    // Accessing contentWindow focus may fail for cross-origin iframes; ignore.
+    iframe.focus()
+    try {
+      iframe.contentWindow?.focus()
+    } catch (error) {
+      // Accessing contentWindow focus may fail for cross-origin iframes; ignore.
+    }
+    return
   }
+
+  const iframe = player?.getIframe() ?? youtubeIframeRef.value
+  iframe?.focus()
 }
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.altKey && event.key === '1') {
     event.preventDefault()
-    focusIframe(docIframeRef)
+    focusArea('doc')
   } else if (event.altKey && event.key === '2') {
     event.preventDefault()
-    focusIframe(youtubeIframeRef)
+    focusArea('video')
   }
 }
+
+function parseYouTubeTime(value: string | null): number {
+  if (!value) return 0
+
+  const numeric = Number(value)
+  if (!Number.isNaN(numeric)) {
+    return numeric
+  }
+
+  const match = value.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/i)
+  if (!match) return 0
+
+  const [, hours, minutes, seconds] = match
+  const totalSeconds =
+    (hours ? Number(hours) * 3600 : 0) +
+    (minutes ? Number(minutes) * 60 : 0) +
+    (seconds ? Number(seconds) : 0)
+
+  return Number.isFinite(totalSeconds) ? totalSeconds : 0
+}
+
+function parseYouTubeLink(value: string): YouTubeLinkInfo | null {
+  try {
+    const url = new URL(value)
+    let videoId = ''
+
+    if (url.hostname.includes('youtu.be')) {
+      videoId = url.pathname.replace('/', '')
+    } else if (url.searchParams.get('v')) {
+      videoId = url.searchParams.get('v') ?? ''
+    } else {
+      const segments = url.pathname.split('/')
+      const embedIndex = segments.findIndex((segment) => segment === 'embed')
+      if (embedIndex !== -1 && segments[embedIndex + 1]) {
+        videoId = segments[embedIndex + 1]
+      }
+    }
+
+    videoId = videoId.replace(/[^\w-]/g, '')
+
+    if (!videoId) {
+      return null
+    }
+
+    const startParam = url.searchParams.get('t') ?? url.searchParams.get('start')
+    const startSeconds = parseYouTubeTime(startParam)
+
+    return { videoId, startSeconds }
+  } catch (error) {
+    return null
+  }
+}
+
+function cueOrLoadVideo(autoplay: boolean) {
+  if (!player) return
+
+  const options = {
+    videoId: currentVideoId.value,
+    startSeconds: currentVideoStartSeconds.value || 0
+  }
+
+  if (autoplay) {
+    player.loadVideoById(options)
+  } else {
+    player.cueVideoById(options)
+  }
+}
+
+function submitDocUrl() {
+  const next = docUrlInput.value.trim()
+  docUrl.value = next || DEFAULT_DOC_URL
+  docUrlInput.value = docUrl.value
+}
+
+function submitVideoUrl() {
+  const trimmed = videoUrlInput.value.trim()
+  if (!trimmed) {
+    videoUrlInput.value = DEFAULT_VIDEO_URL
+    const fallback = parseYouTubeLink(DEFAULT_VIDEO_URL)
+    if (fallback) {
+      currentVideoId.value = fallback.videoId
+      currentVideoStartSeconds.value = fallback.startSeconds
+      if (playerReady.value) {
+        cueOrLoadVideo(true)
+      }
+    }
+    return
+  }
+
+  const parsed = parseYouTubeLink(trimmed)
+
+  if (!parsed) {
+    console.warn('Unable to load video from URL:', trimmed)
+    videoUrlInput.value = `https://www.youtube.com/watch?v=${currentVideoId.value}`
+    return
+  }
+
+  currentVideoId.value = parsed.videoId
+  currentVideoStartSeconds.value = parsed.startSeconds
+  videoUrlInput.value = trimmed
+
+  if (playerReady.value) {
+    cueOrLoadVideo(true)
+  }
+}
+
+const videoEmbedSrc = computed(() => {
+  const params = new URLSearchParams({ enablejsapi: '1', rel: '0' })
+  if (currentVideoStartSeconds.value) {
+    params.set('start', String(Math.floor(currentVideoStartSeconds.value)))
+  }
+  return `https://www.youtube.com/embed/${currentVideoId.value}?${params.toString()}`
+})
 
 onMounted(async () => {
   await loadYouTubeAPI()
@@ -95,6 +232,7 @@ onBeforeUnmount(() => {
     player.destroy()
     player = null
   }
+  playerReady.value = false
 })
 </script>
 
@@ -104,13 +242,29 @@ onBeforeUnmount(() => {
       <header class="panel__header">
         <div>
           <h1>Research Notes</h1>
-          <p>Use <kbd>Alt</kbd> + <kbd>1</kbd> to move focus to the document.</p>
+          <p>
+            Use <kbd>Alt</kbd> + <kbd>1</kbd> to move focus to the document. Paste a new link and press
+            <kbd>Enter</kbd> to load it below.
+          </p>
         </div>
+        <form class="panel__form" @submit.prevent="submitDocUrl">
+          <label class="sr-only" for="doc-url-input">Google Doc URL</label>
+          <input
+            id="doc-url-input"
+            v-model="docUrlInput"
+            class="panel__input"
+            type="url"
+            placeholder="Paste a Google Doc link"
+            inputmode="url"
+            spellcheck="false"
+          />
+          <button class="panel__button" type="submit">Load</button>
+        </form>
       </header>
       <iframe
         ref="docIframeRef"
         class="panel__content"
-        :src="GOOGLE_DOC_URL"
+        :src="docUrl"
         title="Project Google Document"
         frameborder="0"
         tabindex="0"
@@ -123,14 +277,28 @@ onBeforeUnmount(() => {
           <h2>Reference Video</h2>
           <p>
             Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the video. Pause with <kbd>k</kbd> or <kbd>space</kbd> to
-            copy the current timestamp (in milliseconds) to your clipboard.
+            copy the current timestamp (in milliseconds) to your clipboard. Paste any YouTube link and press
+            <kbd>Enter</kbd> to load it.
           </p>
         </div>
+        <form class="panel__form" @submit.prevent="submitVideoUrl">
+          <label class="sr-only" for="video-url-input">YouTube URL</label>
+          <input
+            id="video-url-input"
+            v-model="videoUrlInput"
+            class="panel__input"
+            type="url"
+            placeholder="Paste a YouTube link"
+            inputmode="url"
+            spellcheck="false"
+          />
+          <button class="panel__button" type="submit">Load</button>
+        </form>
       </header>
       <iframe
         ref="youtubeIframeRef"
         class="panel__content"
-        :src="`https://www.youtube.com/embed/${YOUTUBE_VIDEO_ID}?enablejsapi=1&rel=0`"
+        :src="videoEmbedSrc"
         title="YouTube video player"
         frameborder="0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -169,6 +337,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
 
 .panel__header h1,
@@ -194,6 +363,64 @@ onBeforeUnmount(() => {
 .panel__content:focus {
   outline: 3px solid rgba(37, 99, 235, 0.6);
   outline-offset: 0;
+}
+
+.panel__form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.panel__input {
+  flex: 1 1 auto;
+  min-width: 18rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  font-size: 0.95rem;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.panel__input:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.panel__button {
+  padding: 0.55rem 1.2rem;
+  border-radius: 0.6rem;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.panel__button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+}
+
+.panel__button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 kbd {
