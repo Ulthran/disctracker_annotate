@@ -238,73 +238,76 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace">
-    <section class="panel panel--doc">
-      <header class="panel__header">
-        <div>
-          <h1>Research Notes</h1>
-          <p>
-            Use <kbd>Alt</kbd> + <kbd>1</kbd> to move focus to the document. Paste a new link and press
-            <kbd>Enter</kbd> to load it below.
-          </p>
-        </div>
-        <form class="panel__form" @submit.prevent="submitDocUrl">
+    <aside class="sidebar">
+      <section class="sidebar__group">
+        <h1 class="sidebar__title">Research Notes</h1>
+        <p class="sidebar__text">
+          Use <kbd>Alt</kbd> + <kbd>1</kbd> to focus the document. Paste a Google Doc link and press
+          <kbd>Enter</kbd> to refresh the embed.
+        </p>
+        <form class="sidebar__form" @submit.prevent="submitDocUrl">
           <label class="sr-only" for="doc-url-input">Google Doc URL</label>
           <input
             id="doc-url-input"
             v-model="docUrlInput"
-            class="panel__input"
+            class="sidebar__input"
             type="url"
-            placeholder="Paste a Google Doc link"
+            placeholder="https://docs.google.com/..."
             inputmode="url"
             spellcheck="false"
           />
-          <button class="panel__button" type="submit">Load</button>
+          <button class="sidebar__button" type="submit">Load document</button>
         </form>
-      </header>
-      <iframe
-        ref="docIframeRef"
-        class="panel__content"
-        :src="docUrl"
-        title="Project Google Document"
-        frameborder="0"
-        tabindex="0"
-      ></iframe>
-    </section>
+      </section>
 
-    <section class="panel panel--video">
-      <header class="panel__header">
-        <div>
-          <h2>Reference Video</h2>
-          <p>
-            Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the video. Pause with <kbd>k</kbd> or <kbd>space</kbd> to
-            copy the current timestamp (in milliseconds) to your clipboard. Paste any YouTube link and press
-            <kbd>Enter</kbd> to load it.
-          </p>
-        </div>
-        <form class="panel__form" @submit.prevent="submitVideoUrl">
+      <section class="sidebar__group">
+        <h2 class="sidebar__title">Reference Video</h2>
+        <p class="sidebar__text">
+          Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the player. Pause with <kbd>k</kbd> or <kbd>space</kbd> to copy
+          the current timestamp.
+        </p>
+        <form class="sidebar__form" @submit.prevent="submitVideoUrl">
           <label class="sr-only" for="video-url-input">YouTube URL</label>
           <input
             id="video-url-input"
             v-model="videoUrlInput"
-            class="panel__input"
+            class="sidebar__input"
             type="url"
-            placeholder="Paste a YouTube link"
+            placeholder="https://youtube.com/watch?v=..."
             inputmode="url"
             spellcheck="false"
           />
-          <button class="panel__button" type="submit">Load</button>
+          <button class="sidebar__button" type="submit">Load video</button>
         </form>
-      </header>
-      <iframe
-        ref="youtubeIframeRef"
-        class="panel__content"
-        :src="videoEmbedSrc"
-        title="YouTube video player"
-        frameborder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowfullscreen
-        tabindex="0"
-      ></iframe>
+      </section>
+    </aside>
+
+    <section class="content">
+      <div class="embed embed--doc">
+        <span class="embed__label">Document</span>
+        <iframe
+          ref="docIframeRef"
+          class="embed__frame"
+          :src="docUrl"
+          title="Project Google Document"
+          frameborder="0"
+          tabindex="0"
+        ></iframe>
+      </div>
+
+      <div class="embed embed--video">
+        <span class="embed__label">Video</span>
+        <iframe
+          ref="youtubeIframeRef"
+          class="embed__frame"
+          :src="videoEmbedSrc"
+          title="YouTube video player"
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen
+          tabindex="0"
+        ></iframe>
+      </div>
     </section>
   </main>
 </template>
@@ -312,103 +315,161 @@ onBeforeUnmount(() => {
 <style scoped>
 .workspace {
   display: flex;
-  flex-direction: column;
   height: 100vh;
   background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
   color: #0f172a;
 }
 
-.panel {
+.sidebar {
+  flex: 0 0 clamp(15rem, 20vw, 21rem);
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 1.5rem clamp(1.5rem, 3vw, 2.5rem);
-  box-sizing: border-box;
-}
-
-.panel--doc {
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-}
-
-.panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(10px);
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  overflow-y: auto;
 }
 
-.panel__header h1,
-.panel__header h2 {
-  margin: 0 0 0.25rem;
+.sidebar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sidebar__title {
+  margin: 0;
+  font-size: 1.05rem;
   font-weight: 600;
 }
 
-.panel__header p {
+.sidebar__text {
   margin: 0;
   color: #475569;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
-.panel__content {
-  flex: 1;
-  border: none;
-  border-radius: 0.75rem;
-  background-color: #ffffff;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
-}
-
-.panel__content:focus {
-  outline: 3px solid rgba(37, 99, 235, 0.6);
-  outline-offset: 0;
-}
-
-.panel__form {
+.sidebar__form {
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  align-items: center;
-  flex-wrap: nowrap;
 }
 
-.panel__input {
-  flex: 1 1 auto;
-  min-width: 18rem;
-  padding: 0.6rem 0.8rem;
-  border-radius: 0.6rem;
-  border: 1px solid rgba(15, 23, 42, 0.15);
-  font-size: 0.95rem;
+.sidebar__input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  font-size: 0.9rem;
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.panel__input:focus {
+.sidebar__input:focus {
   outline: none;
-  border-color: rgba(37, 99, 235, 0.5);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
 }
 
-.panel__button {
-  padding: 0.55rem 1.2rem;
-  border-radius: 0.6rem;
+.sidebar__button {
+  padding: 0.5rem 0.85rem;
+  border-radius: 0.55rem;
   border: none;
   background: linear-gradient(135deg, #2563eb, #1d4ed8);
   color: #ffffff;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  align-self: flex-start;
 }
 
-.panel__button:hover {
+.sidebar__button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 8px 16px rgba(37, 99, 235, 0.25);
 }
 
-.panel__button:focus {
+.sidebar__button:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem 0.9rem;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+}
+
+.embed {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 0.75rem;
+  background-color: #ffffff;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+}
+
+.embed--doc {
+  flex: 3;
+}
+
+.embed--video {
+  flex: 2;
+}
+
+.embed__label {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #f8fafc;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.embed__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.embed__frame:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.6);
+  outline-offset: 0;
+}
+
+@media (max-width: 960px) {
+  .workspace {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    flex: none;
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    flex-direction: column;
+    padding: 0.75rem 1rem;
+  }
+
+  .content {
+    padding: 0.75rem;
+  }
 }
 
 .sr-only {
