@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
+const MIN_DOC_FLEX = 0.2
+const MAX_DOC_FLEX = 0.8
+
 const docIframeRef = ref<HTMLIFrameElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
+const contentRef = ref<HTMLElement | null>(null)
 let player: YT.Player | null = null
 
 type YouTubeLinkInfo = {
@@ -15,13 +19,17 @@ const DEFAULT_DOC_URL =
 const DEFAULT_VIDEO_URL =
   'https://www.youtube.com/watch?v=QQlyrXdStK0&t=831s&pp=ygUQdWx0aW1hdGUgZnJpc2JlZQ%3D%3D'
 
-const docUrl = ref(DEFAULT_DOC_URL)
+const docUrl = ref(toEmbeddedDocUrl(DEFAULT_DOC_URL))
 const docUrlInput = ref(DEFAULT_DOC_URL)
 
 const currentVideoId = ref('QQlyrXdStK0')
 const currentVideoStartSeconds = ref(831)
 const videoUrlInput = ref(DEFAULT_VIDEO_URL)
 const playerReady = ref(false)
+const docFlex = ref(0.58)
+const isDragging = ref(false)
+
+let activeResizePointerId: number | null = null
 
 function loadYouTubeAPI() {
   return new Promise<void>((resolve) => {
@@ -176,8 +184,9 @@ function cueOrLoadVideo(autoplay: boolean) {
 
 function submitDocUrl() {
   const next = docUrlInput.value.trim()
-  docUrl.value = next || DEFAULT_DOC_URL
-  docUrlInput.value = docUrl.value
+  const chosen = next || DEFAULT_DOC_URL
+  docUrl.value = toEmbeddedDocUrl(chosen)
+  docUrlInput.value = chosen
 }
 
 function submitVideoUrl() {
@@ -220,6 +229,8 @@ const videoEmbedSrc = computed(() => {
   return `https://www.youtube.com/embed/${currentVideoId.value}?${params.toString()}`
 })
 
+const videoFlex = computed(() => 1 - docFlex.value)
+
 onMounted(async () => {
   await loadYouTubeAPI()
   initYouTubePlayer()
@@ -228,12 +239,105 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
+  finishResize()
   if (player) {
     player.destroy()
     player = null
   }
   playerReady.value = false
 })
+
+function clampDocFlex(value: number) {
+  return Math.min(Math.max(value, MIN_DOC_FLEX), MAX_DOC_FLEX)
+}
+
+function updateDocFlexFromPointer(event: PointerEvent) {
+  if (!contentRef.value) return
+  const rect = contentRef.value.getBoundingClientRect()
+  if (!rect.height) return
+  const ratio = (event.clientY - rect.top) / rect.height
+  docFlex.value = clampDocFlex(ratio)
+}
+
+function startResize(event: PointerEvent) {
+  if (isDragging.value) {
+    event.preventDefault()
+    return
+  }
+  event.preventDefault()
+  isDragging.value = true
+  activeResizePointerId = event.pointerId
+  updateDocFlexFromPointer(event)
+  window.addEventListener('pointermove', handlePointerMove)
+  window.addEventListener('pointerup', stopResize)
+  window.addEventListener('pointercancel', stopResize)
+}
+
+function handlePointerMove(event: PointerEvent) {
+  if (!isDragging.value || event.pointerId !== activeResizePointerId) return
+  updateDocFlexFromPointer(event)
+}
+
+function stopResize(event: PointerEvent) {
+  if (event.pointerId !== activeResizePointerId) return
+  finishResize()
+}
+
+function removeResizeListeners() {
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('pointerup', stopResize)
+  window.removeEventListener('pointercancel', stopResize)
+}
+
+function finishResize() {
+  if (isDragging.value) {
+    isDragging.value = false
+    activeResizePointerId = null
+  }
+  removeResizeListeners()
+}
+
+function adjustDocFlex(delta: number) {
+  docFlex.value = clampDocFlex(docFlex.value + delta)
+}
+
+function handleSeparatorKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+    event.preventDefault()
+    adjustDocFlex(0.03)
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+    event.preventDefault()
+    adjustDocFlex(-0.03)
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    docFlex.value = MAX_DOC_FLEX
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    docFlex.value = MIN_DOC_FLEX
+  }
+}
+
+function toEmbeddedDocUrl(raw: string) {
+  try {
+    const url = new URL(raw)
+    const docMatch = url.pathname.match(/\/document(?:\/u\/\d+)?\/d\/([\w-]+)/)
+    if (docMatch) {
+      const docId = docMatch[1]
+      const hash = url.hash ?? ''
+      const embedUrl = new URL(`https://docs.google.com/document/d/${docId}/preview`)
+      url.searchParams.forEach((value, key) => {
+        if (key !== 'rm') {
+          embedUrl.searchParams.set(key, value)
+        }
+      })
+      embedUrl.searchParams.set('rm', 'minimal')
+      return `${embedUrl.toString()}${hash}`
+    }
+    return raw
+  } catch (error) {
+    return raw
+  }
+}
 </script>
 
 <template>
@@ -282,8 +386,11 @@ onBeforeUnmount(() => {
       </section>
     </aside>
 
-    <section class="content">
-      <div class="embed embed--doc">
+    <section ref="contentRef" class="content">
+      <div
+        class="embed embed--doc"
+        :style="{ flexGrow: docFlex, flexBasis: '0%' }"
+      >
         <span class="embed__label">Document</span>
         <iframe
           ref="docIframeRef"
@@ -295,7 +402,23 @@ onBeforeUnmount(() => {
         ></iframe>
       </div>
 
-      <div class="embed embed--video">
+      <div
+        class="split-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        :aria-valuenow="Math.round(docFlex * 100)"
+        :aria-valuemin="Math.round(MIN_DOC_FLEX * 100)"
+        :aria-valuemax="Math.round(MAX_DOC_FLEX * 100)"
+        tabindex="0"
+        @pointerdown="startResize"
+        @keydown="handleSeparatorKeydown"
+        :class="{ 'split-handle--dragging': isDragging }"
+      ></div>
+
+      <div
+        class="embed embed--video"
+        :style="{ flexGrow: videoFlex, flexBasis: '0%' }"
+      >
         <span class="embed__label">Video</span>
         <iframe
           ref="youtubeIframeRef"
@@ -418,14 +541,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.embed--doc {
-  flex: 3;
-}
-
-.embed--video {
-  flex: 2;
-}
-
 .embed__label {
   position: absolute;
   top: 0.75rem;
@@ -451,6 +566,35 @@ onBeforeUnmount(() => {
 .embed__frame:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.6);
   outline-offset: 0;
+}
+
+.split-handle {
+  position: relative;
+  flex: 0 0 auto;
+  height: 0.85rem;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  border-radius: 0.5rem;
+}
+
+.split-handle::before {
+  content: '';
+  width: 60%;
+  max-width: 12rem;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.28);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.split-handle:hover::before,
+.split-handle:focus-visible::before,
+.split-handle--dragging::before {
+  background: rgba(37, 99, 235, 0.75);
+  transform: scaleX(1.05);
 }
 
 @media (max-width: 960px) {
