@@ -1,13 +1,236 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+
+type GoogleCredentialResponse = {
+  credential: string
+  clientId: string
+  select_by: string
+}
+
+type GoogleIdInitializeOptions = {
+  client_id: string
+  callback: (response: GoogleCredentialResponse) => void
+  auto_select?: boolean
+  cancel_on_tap_out?: boolean
+  prompt_parent_id?: string
+}
+
+type GoogleIdRenderButtonOptions = {
+  type?: 'standard' | 'icon'
+  theme?: 'outline' | 'filled_blue' | 'filled_black'
+  size?: 'large' | 'medium' | 'small'
+  shape?: 'rectangular' | 'pill' | 'circle' | 'square'
+  text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin'
+  logo_alignment?: 'left' | 'center'
+  width?: string | number
+}
+
+type GoogleIdentity = {
+  accounts?: {
+    id?: {
+      initialize: (options: GoogleIdInitializeOptions) => void
+      renderButton: (parent: HTMLElement, options: GoogleIdRenderButtonOptions) => void
+      prompt: () => void
+      disableAutoSelect: () => void
+      revoke?: (hint: string, callback: () => void) => void
+    }
+  }
+}
+
+declare global {
+  interface Window {
+    google?: GoogleIdentity
+  }
+}
+
+type UserProfile = {
+  name: string
+  email: string
+  picture?: string
+}
 
 const MIN_DOC_FLEX = 0.2
 const MAX_DOC_FLEX = 0.8
+
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
+const googleAuthReady = ref(false)
+const authError = ref<string | null>(null)
+const googleButtonContainerRef = ref<HTMLElement | null>(null)
+const userProfile = ref<UserProfile | null>(null)
+const youTubeApiReady = ref(false)
 
 const docIframeRef = ref<HTMLIFrameElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 let player: YT.Player | null = null
+
+const isAuthenticated = computed(() => !!userProfile.value)
+
+const userInitials = computed(() => {
+  const name = userProfile.value?.name?.trim()
+  if (name) {
+    return name
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('')
+  }
+
+  const email = userProfile.value?.email ?? ''
+  return email ? email.charAt(0).toUpperCase() : '?'
+})
+
+let googleScriptPromise: Promise<void> | null = null
+
+function getGoogleAccountsId() {
+  return window.google?.accounts?.id ?? null
+}
+
+function loadGoogleIdentityScript() {
+  if (googleScriptPromise) {
+    return googleScriptPromise
+  }
+
+  googleScriptPromise = new Promise<void>((resolve, reject) => {
+    if (getGoogleAccountsId()) {
+      resolve()
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Failed to load Google Identity Services script.'))
+    document.head.appendChild(script)
+  })
+
+  return googleScriptPromise
+}
+
+function renderGoogleButton() {
+  const googleId = getGoogleAccountsId()
+  if (!googleId || !googleButtonContainerRef.value) {
+    return
+  }
+
+  googleButtonContainerRef.value.innerHTML = ''
+  googleId.renderButton(googleButtonContainerRef.value, {
+    type: 'standard',
+    theme: 'filled_blue',
+    size: 'large',
+    shape: 'pill',
+    text: 'signin_with'
+  })
+}
+
+function decodeGoogleCredential(credential: string): UserProfile | null {
+  try {
+    const payloadSegment = credential.split('.')[1]
+    if (!payloadSegment) {
+      return null
+    }
+
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const json = atob(padded)
+    const payload = JSON.parse(json) as {
+      name?: string
+      email?: string
+      picture?: string
+    }
+
+    if (!payload.email) {
+      return null
+    }
+
+    return {
+      name: payload.name ?? payload.email,
+      email: payload.email,
+      picture: payload.picture
+    }
+  } catch (error) {
+    console.warn('Failed to decode Google credential.', error)
+    return null
+  }
+}
+
+function handleCredentialResponse(response: GoogleCredentialResponse) {
+  const profile = decodeGoogleCredential(response.credential)
+  if (!profile) {
+    authError.value = 'Unable to read Google profile information.'
+    return
+  }
+
+  authError.value = null
+  userProfile.value = profile
+}
+
+async function initializeGoogleAuth() {
+  if (!googleClientId) {
+    authError.value = 'Missing Google client ID configuration.'
+    return
+  }
+
+  try {
+    await loadGoogleIdentityScript()
+  } catch (error) {
+    console.error(error)
+    authError.value = 'Unable to load Google authentication services.'
+    return
+  }
+
+  const googleId = getGoogleAccountsId()
+  if (!googleId) {
+    authError.value = 'Google authentication is unavailable in this browser.'
+    return
+  }
+
+  googleId.initialize({
+    client_id: googleClientId,
+    callback: handleCredentialResponse,
+    auto_select: false,
+    cancel_on_tap_out: true
+  })
+
+  googleAuthReady.value = true
+  googleId.prompt()
+}
+
+function finalizeSignOut() {
+  userProfile.value = null
+  if (player) {
+    player.destroy()
+    player = null
+  }
+  playerReady.value = false
+}
+
+function signOut() {
+  const googleId = getGoogleAccountsId()
+
+  const completeSignOut = () => {
+    finalizeSignOut()
+    void nextTick(() => {
+      if (googleAuthReady.value && !isAuthenticated.value) {
+        renderGoogleButton()
+        googleId?.prompt()
+      }
+    })
+  }
+
+  if (googleId) {
+    googleId.disableAutoSelect()
+    const email = userProfile.value?.email
+    if (email && typeof googleId.revoke === 'function') {
+      googleId.revoke(email, completeSignOut)
+      return
+    }
+  }
+
+  completeSignOut()
+}
 
 type YouTubeLinkInfo = {
   videoId: string
@@ -31,6 +254,35 @@ const isDragging = ref(false)
 
 let activeResizePointerId: number | null = null
 
+watch(
+  [googleAuthReady, isAuthenticated],
+  async ([ready, authed]) => {
+    if (ready && !authed) {
+      await nextTick()
+      renderGoogleButton()
+    }
+  },
+  { immediate: true }
+)
+
+watch(isAuthenticated, (authed) => {
+  if (!authed && player) {
+    player.destroy()
+    player = null
+    playerReady.value = false
+  }
+})
+
+watch(
+  [() => youtubeIframeRef.value, youTubeApiReady, isAuthenticated],
+  async ([iframe, apiReady, authed]) => {
+    if (iframe && apiReady && authed) {
+      await nextTick()
+      initYouTubePlayer()
+    }
+  }
+)
+
 function loadYouTubeAPI() {
   return new Promise<void>((resolve) => {
     const existingYT = (window as any).YT
@@ -50,7 +302,7 @@ function loadYouTubeAPI() {
 }
 
 function initYouTubePlayer() {
-  if (!youtubeIframeRef.value) return
+  if (player || !youtubeIframeRef.value) return
 
   player = new YT.Player(youtubeIframeRef.value, {
     events: {
@@ -88,6 +340,8 @@ async function copyTimestampToClipboard() {
 }
 
 function focusArea(target: 'doc' | 'video') {
+  if (!isAuthenticated.value) return
+
   if (target === 'doc') {
     const iframe = docIframeRef.value
     if (!iframe) return
@@ -106,6 +360,8 @@ function focusArea(target: 'doc' | 'video') {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  if (!isAuthenticated.value) return
+
   if (event.altKey && event.key === '1') {
     event.preventDefault()
     focusArea('doc')
@@ -232,8 +488,9 @@ const videoEmbedSrc = computed(() => {
 const videoFlex = computed(() => 1 - docFlex.value)
 
 onMounted(async () => {
+  void initializeGoogleAuth()
   await loadYouTubeAPI()
-  initYouTubePlayer()
+  youTubeApiReady.value = true
   window.addEventListener('keydown', handleKeydown)
 })
 
@@ -341,8 +598,26 @@ function toEmbeddedDocUrl(raw: string) {
 </script>
 
 <template>
-  <main class="workspace">
+  <main v-if="isAuthenticated" class="workspace">
     <aside class="sidebar">
+      <header class="sidebar__header">
+        <div class="user-pill">
+          <div
+            class="user-pill__avatar"
+            :class="{ 'user-pill__avatar--fallback': !userProfile?.picture }"
+            aria-hidden="true"
+          >
+            <img v-if="userProfile?.picture" :src="userProfile.picture" alt="" />
+            <span v-else>{{ userInitials }}</span>
+          </div>
+          <div class="user-pill__meta">
+            <span class="user-pill__name">{{ userProfile?.name }}</span>
+            <span class="user-pill__email">{{ userProfile?.email }}</span>
+          </div>
+        </div>
+        <button class="sidebar__signout" type="button" @click="signOut">Sign out</button>
+      </header>
+
       <section class="sidebar__group">
         <h1 class="sidebar__title">Research Notes</h1>
         <p class="sidebar__text">
@@ -433,6 +708,27 @@ function toEmbeddedDocUrl(raw: string) {
       </div>
     </section>
   </main>
+
+  <div v-else class="auth">
+    <div class="auth__panel">
+      <h1 class="auth__title">Sign in to continue</h1>
+      <p class="auth__text">
+        Sign in with Google to open the shared document and video with your account permissions.
+      </p>
+      <div class="auth__button-area">
+        <div
+          ref="googleButtonContainerRef"
+          class="auth__button-slot"
+          v-show="googleAuthReady"
+        ></div>
+        <p v-if="!googleAuthReady && !authError" class="auth__hint">Loading Google Sign-In…</p>
+        <p v-if="authError" class="auth__error">{{ authError }}</p>
+      </div>
+      <p class="auth__disclaimer">
+        Your Google credential is kept in this session only and used to authenticate the embeds.
+      </p>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -454,6 +750,98 @@ function toEmbeddedDocUrl(raw: string) {
   backdrop-filter: blur(10px);
   border-right: 1px solid rgba(15, 23, 42, 0.08);
   overflow-y: auto;
+}
+
+.sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.user-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.user-pill__avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #f8fafc;
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.3);
+}
+
+.user-pill__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-pill__avatar--fallback {
+  background: linear-gradient(135deg, #2563eb, #1e293b);
+  box-shadow: 0 6px 22px rgba(30, 64, 175, 0.35);
+}
+
+.user-pill__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.user-pill__name {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-pill__email {
+  font-size: 0.8rem;
+  color: rgba(15, 23, 42, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__signout {
+  border: none;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #f8fafc;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0.42rem 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28);
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sidebar__signout:hover {
+  background: #1e40af;
+  box-shadow: 0 10px 24px rgba(30, 64, 175, 0.35);
+}
+
+.sidebar__signout:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
 
 .sidebar__group {
@@ -611,8 +999,100 @@ function toEmbeddedDocUrl(raw: string) {
     padding: 0.75rem 1rem;
   }
 
+  .sidebar__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding-bottom: 0.85rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .sidebar__signout {
+    align-self: stretch;
+    justify-content: center;
+  }
+
   .content {
     padding: 0.75rem;
+  }
+}
+
+.auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem;
+  background: linear-gradient(180deg, #e0f2fe 0%, #e2e8f0 100%);
+  box-sizing: border-box;
+}
+
+.auth__panel {
+  max-width: 420px;
+  width: 100%;
+  padding: 2.5rem 2.75rem;
+  border-radius: 1.15rem;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 28px 60px rgba(15, 23, 42, 0.18);
+  text-align: center;
+  backdrop-filter: blur(6px);
+}
+
+.auth__title {
+  margin: 0 0 0.85rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.auth__text {
+  margin: 0 0 1.6rem;
+  color: rgba(15, 23, 42, 0.78);
+  line-height: 1.6;
+}
+
+.auth__button-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  min-height: 3.25rem;
+}
+
+.auth__button-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3rem;
+}
+
+.auth__hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.auth__error {
+  margin: 0;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.auth__disclaimer {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(15, 23, 42, 0.65);
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .auth {
+    padding: 1.5rem;
+  }
+
+  .auth__panel {
+    padding: 2rem 1.5rem;
   }
 }
 
