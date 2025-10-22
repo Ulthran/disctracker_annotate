@@ -4,6 +4,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 const MIN_DOC_FLEX = 0.2
 const MAX_DOC_FLEX = 0.8
 
+const SIDEBAR_ID = 'workspace-sidebar'
+
 const docIframeRef = ref<HTMLIFrameElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
@@ -21,6 +23,7 @@ const DEFAULT_VIDEO_URL =
 
 const docUrl = ref(toEmbeddedDocUrl(DEFAULT_DOC_URL))
 const docUrlInput = ref(DEFAULT_DOC_URL)
+const currentDocSourceUrl = computed(() => docUrlInput.value || DEFAULT_DOC_URL)
 
 const currentVideoId = ref('QQlyrXdStK0')
 const currentVideoStartSeconds = ref(831)
@@ -28,6 +31,8 @@ const videoUrlInput = ref(DEFAULT_VIDEO_URL)
 const playerReady = ref(false)
 const docFlex = ref(0.58)
 const isDragging = ref(false)
+const isSidebarCollapsed = ref(false)
+const isSidebarExpanded = computed(() => !isSidebarCollapsed.value)
 
 let activeResizePointerId: number | null = null
 
@@ -317,6 +322,10 @@ function handleSeparatorKeydown(event: KeyboardEvent) {
   }
 }
 
+function toggleSidebar() {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+}
+
 function toEmbeddedDocUrl(raw: string) {
   try {
     const url = new URL(raw)
@@ -342,12 +351,44 @@ function toEmbeddedDocUrl(raw: string) {
 
 <template>
   <main class="workspace">
-    <aside class="sidebar">
+    <button
+      v-if="isSidebarCollapsed"
+      class="sidebar-toggle"
+      type="button"
+      :aria-controls="SIDEBAR_ID"
+      :aria-expanded="isSidebarExpanded"
+      @click="toggleSidebar"
+    >
+      Show sidebar
+    </button>
+
+    <aside
+      v-show="!isSidebarCollapsed"
+      :id="SIDEBAR_ID"
+      class="sidebar"
+      :aria-hidden="isSidebarCollapsed"
+    >
       <section class="sidebar__group">
-        <h1 class="sidebar__title">Research Notes</h1>
+        <div class="sidebar__group-header">
+          <h1 class="sidebar__title">Research Notes</h1>
+          <button
+            class="sidebar__collapse-button"
+            type="button"
+            :aria-controls="SIDEBAR_ID"
+            :aria-expanded="isSidebarExpanded"
+            @click="toggleSidebar"
+          >
+            Hide sidebar
+          </button>
+        </div>
         <p class="sidebar__text">
           Use <kbd>Alt</kbd> + <kbd>1</kbd> to focus the document. Paste a Google Doc link and press
           <kbd>Enter</kbd> to refresh the embed.
+        </p>
+        <p class="sidebar__note">
+          Google Docs only allows read-only previews inside the workspace—Google blocks editing views
+          from loading in embedded frames, so use the link below to edit in a new tab if you need to
+          make changes.
         </p>
         <form class="sidebar__form" @submit.prevent="submitDocUrl">
           <label class="sr-only" for="doc-url-input">Google Doc URL</label>
@@ -362,6 +403,14 @@ function toEmbeddedDocUrl(raw: string) {
           />
           <button class="sidebar__button" type="submit">Load document</button>
         </form>
+        <a
+          class="sidebar__link"
+          :href="currentDocSourceUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open in Google Docs
+        </a>
       </section>
 
       <section class="sidebar__group">
@@ -441,6 +490,7 @@ function toEmbeddedDocUrl(raw: string) {
   height: 100vh;
   background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
   color: #0f172a;
+  position: relative;
 }
 
 .sidebar {
@@ -456,10 +506,80 @@ function toEmbeddedDocUrl(raw: string) {
   overflow-y: auto;
 }
 
+.sidebar-toggle {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.25);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+  background: linear-gradient(135deg, #1e40af, #1d4ed8);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px rgba(30, 64, 175, 0.35);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 3px solid rgba(129, 140, 248, 0.7);
+  outline-offset: 2px;
+}
+
 .sidebar__group {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.sidebar__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sidebar__collapse-button {
+  margin-left: auto;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.sidebar__collapse-button:hover {
+  background: rgba(37, 99, 235, 0.16);
+  color: #1e3a8a;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.18);
+  transform: translateY(-1px);
+}
+
+.sidebar__collapse-button:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
 }
 
 .sidebar__title {
@@ -472,6 +592,13 @@ function toEmbeddedDocUrl(raw: string) {
   margin: 0;
   color: #475569;
   font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.sidebar__note {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.8rem;
   line-height: 1.4;
 }
 
@@ -518,6 +645,28 @@ function toEmbeddedDocUrl(raw: string) {
 .sidebar__button:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+.sidebar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1d4ed8;
+  text-decoration: none;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.sidebar__link:hover {
+  color: #1e3a8a;
+  transform: translateY(-1px);
+}
+
+.sidebar__link:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+  border-radius: 0.35rem;
 }
 
 .content {
@@ -609,6 +758,22 @@ function toEmbeddedDocUrl(raw: string) {
     border-bottom: 1px solid rgba(15, 23, 42, 0.08);
     flex-direction: column;
     padding: 0.75rem 1rem;
+  }
+
+  .sidebar-toggle {
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.5rem 0.85rem;
+  }
+
+  .sidebar__group-header {
+    gap: 0.5rem;
+  }
+
+  .sidebar__collapse-button {
+    width: 100%;
+    margin-left: 0;
+    justify-content: center;
   }
 
   .content {
