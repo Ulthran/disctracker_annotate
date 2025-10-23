@@ -4,7 +4,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 const MIN_DOC_FLEX = 0.2
 const MAX_DOC_FLEX = 0.8
 
-const docIframeRef = ref<HTMLIFrameElement | null>(null)
+const SIDEBAR_ID = 'workspace-sidebar'
+
+const notesTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 let player: YT.Player | null = null
@@ -14,13 +16,10 @@ type YouTubeLinkInfo = {
   startSeconds: number
 }
 
-const DEFAULT_DOC_URL =
-  'https://docs.google.com/document/d/1-RxEnSPYk5Nt6QIzDxjhDam1ktuj9t8HTTmTtGm_v3k/edit?tab=t.0'
 const DEFAULT_VIDEO_URL =
   'https://www.youtube.com/watch?v=QQlyrXdStK0&t=831s&pp=ygUQdWx0aW1hdGUgZnJpc2JlZQ%3D%3D'
 
-const docUrl = ref(toEmbeddedDocUrl(DEFAULT_DOC_URL))
-const docUrlInput = ref(DEFAULT_DOC_URL)
+const notesContent = ref('')
 
 const currentVideoId = ref('QQlyrXdStK0')
 const currentVideoStartSeconds = ref(831)
@@ -28,6 +27,8 @@ const videoUrlInput = ref(DEFAULT_VIDEO_URL)
 const playerReady = ref(false)
 const docFlex = ref(0.58)
 const isDragging = ref(false)
+const isSidebarCollapsed = ref(false)
+const isSidebarExpanded = computed(() => !isSidebarCollapsed.value)
 
 let activeResizePointerId: number | null = null
 
@@ -87,17 +88,97 @@ async function copyTimestampToClipboard() {
   }
 }
 
-function focusArea(target: 'doc' | 'video') {
-  if (target === 'doc') {
-    const iframe = docIframeRef.value
-    if (!iframe) return
+function formatTimestampForNotes(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+    return '[00:00]'
+  }
 
-    iframe.focus()
+  const totalSeconds = Math.max(0, Math.floor(seconds))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const secs = totalSeconds % 60
+
+  const minutesText = String(minutes).padStart(2, '0')
+  const secondsText = String(secs).padStart(2, '0')
+  const parts = hours > 0 ? [String(hours), minutesText, secondsText] : [minutesText, secondsText]
+
+  return `[${parts.join(':')}]`
+}
+
+function insertTimestampedLineBreak() {
+  const textarea = notesTextareaRef.value
+  if (!textarea) return
+
+  const timestampLabel = formatTimestampForNotes(player?.getCurrentTime())
+
+  const start = textarea.selectionStart ?? 0
+  const end = textarea.selectionEnd ?? start
+  const value = textarea.value
+  const scrollPosition = textarea.scrollTop
+
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const precedingChar = start > 0 ? value[start - 1] : ''
+  const followingChar = after.charAt(0)
+  const needsLeadingNewline =
+    start > 0 && precedingChar !== '\n' && precedingChar !== '\r'
+  const needsTrailingNewline =
+    after.length > 0 && followingChar !== '\n' && followingChar !== '\r'
+  const timestampWithSpace = `${timestampLabel} `
+
+  const insertion = `${needsLeadingNewline ? '\n' : ''}${timestampWithSpace}${needsTrailingNewline ? '\n' : ''}`
+  const newValue = `${before}${insertion}${after}`
+
+  notesContent.value = newValue
+  textarea.value = newValue
+
+  const caretPosition =
+    before.length + (needsLeadingNewline ? 1 : 0) + timestampWithSpace.length
+
+  requestAnimationFrame(() => {
+    textarea.setSelectionRange(caretPosition, caretPosition)
+    textarea.scrollTop = scrollPosition
+  })
+
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+function handleNotesKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
+    return
+  }
+
+  event.preventDefault()
+  insertTimestampedLineBreak()
+}
+
+function focusNotes() {
+  const textarea = notesTextareaRef.value
+  if (!textarea) return
+
+  requestAnimationFrame(() => {
+    const activeTextarea = notesTextareaRef.value
+    if (!activeTextarea) return
     try {
-      iframe.contentWindow?.focus()
+      activeTextarea.focus({ preventScroll: true })
     } catch (error) {
-      // Accessing contentWindow focus may fail for cross-origin iframes; ignore.
+      activeTextarea.focus()
     }
+  })
+}
+
+function handleNotesBlur() {
+  requestAnimationFrame(() => {
+    const activeElement = document.activeElement as HTMLElement | null
+    if (!activeElement || activeElement === document.body) {
+      focusNotes()
+    }
+  })
+}
+
+function focusArea(target: 'notes' | 'video') {
+  if (target === 'notes') {
+    focusNotes()
     return
   }
 
@@ -106,12 +187,19 @@ function focusArea(target: 'doc' | 'video') {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.altKey && event.key === '1') {
+  const key = event.key.toLowerCase()
+  if (!event.altKey) return
+
+  if (key === '1') {
     event.preventDefault()
-    focusArea('doc')
-  } else if (event.altKey && event.key === '2') {
+    focusArea('notes')
+  } else if (key === '2') {
     event.preventDefault()
     focusArea('video')
+  } else if (key === 'p') {
+    event.preventDefault()
+    toggleVideoPlayback()
+    focusNotes()
   }
 }
 
@@ -182,11 +270,15 @@ function cueOrLoadVideo(autoplay: boolean) {
   }
 }
 
-function submitDocUrl() {
-  const next = docUrlInput.value.trim()
-  const chosen = next || DEFAULT_DOC_URL
-  docUrl.value = toEmbeddedDocUrl(chosen)
-  docUrlInput.value = chosen
+function toggleVideoPlayback() {
+  if (!player || !playerReady.value) return
+
+  const state = player.getPlayerState()
+  if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
+    player.pauseVideo()
+  } else {
+    player.playVideo()
+  }
 }
 
 function submitVideoUrl() {
@@ -232,6 +324,7 @@ const videoEmbedSrc = computed(() => {
 const videoFlex = computed(() => 1 - docFlex.value)
 
 onMounted(async () => {
+  focusNotes()
   await loadYouTubeAPI()
   initYouTubePlayer()
   window.addEventListener('keydown', handleKeydown)
@@ -317,58 +410,61 @@ function handleSeparatorKeydown(event: KeyboardEvent) {
   }
 }
 
-function toEmbeddedDocUrl(raw: string) {
-  try {
-    const url = new URL(raw)
-    const docMatch = url.pathname.match(/\/document(?:\/u\/\d+)?\/d\/([\w-]+)/)
-    if (docMatch) {
-      const docId = docMatch[1]
-      const hash = url.hash ?? ''
-      const embedUrl = new URL(`https://docs.google.com/document/d/${docId}/preview`)
-      url.searchParams.forEach((value, key) => {
-        if (key !== 'rm') {
-          embedUrl.searchParams.set(key, value)
-        }
-      })
-      embedUrl.searchParams.set('rm', 'minimal')
-      return `${embedUrl.toString()}${hash}`
-    }
-    return raw
-  } catch (error) {
-    return raw
-  }
+function toggleSidebar() {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
 }
+
 </script>
 
 <template>
   <main class="workspace">
-    <aside class="sidebar">
+    <button
+      v-if="isSidebarCollapsed"
+      class="sidebar-toggle"
+      type="button"
+      :aria-controls="SIDEBAR_ID"
+      :aria-expanded="isSidebarExpanded"
+      @click="toggleSidebar"
+    >
+      Show sidebar
+    </button>
+
+    <aside
+      v-show="!isSidebarCollapsed"
+      :id="SIDEBAR_ID"
+      class="sidebar"
+      :aria-hidden="isSidebarCollapsed"
+    >
       <section class="sidebar__group">
-        <h1 class="sidebar__title">Research Notes</h1>
+        <div class="sidebar__group-header">
+          <h1 class="sidebar__title">Research Notes</h1>
+          <button
+            class="sidebar__collapse-button"
+            type="button"
+            :aria-controls="SIDEBAR_ID"
+            :aria-expanded="isSidebarExpanded"
+            @click="toggleSidebar"
+          >
+            Hide sidebar
+          </button>
+        </div>
         <p class="sidebar__text">
-          Use <kbd>Alt</kbd> + <kbd>1</kbd> to focus the document. Paste a Google Doc link and press
-          <kbd>Enter</kbd> to refresh the embed.
+          Start typing in the notes panel below. Use <kbd>Alt</kbd> + <kbd>1</kbd> anytime to return your
+          cursor to the notes field—the workspace will also refocus it automatically if nothing else is
+          selected.
         </p>
-        <form class="sidebar__form" @submit.prevent="submitDocUrl">
-          <label class="sr-only" for="doc-url-input">Google Doc URL</label>
-          <input
-            id="doc-url-input"
-            v-model="docUrlInput"
-            class="sidebar__input"
-            type="url"
-            placeholder="https://docs.google.com/..."
-            inputmode="url"
-            spellcheck="false"
-          />
-          <button class="sidebar__button" type="submit">Load document</button>
-        </form>
+        <p class="sidebar__note">
+          Press <kbd>Enter</kbd> to start a new line with the current timestamp automatically. Use
+          <kbd>Alt</kbd> + <kbd>P</kbd> to play or pause the video without leaving the notes area.
+          Pausing still copies the current timestamp to your clipboard.
+        </p>
       </section>
 
       <section class="sidebar__group">
         <h2 class="sidebar__title">Reference Video</h2>
         <p class="sidebar__text">
-          Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the player. Pause with <kbd>k</kbd> or <kbd>space</kbd> to copy
-          the current timestamp.
+          Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the player. You can also press <kbd>Alt</kbd> + <kbd>P</kbd>
+          from the notes field to toggle playback.
         </p>
         <form class="sidebar__form" @submit.prevent="submitVideoUrl">
           <label class="sr-only" for="video-url-input">YouTube URL</label>
@@ -388,18 +484,22 @@ function toEmbeddedDocUrl(raw: string) {
 
     <section ref="contentRef" class="content">
       <div
-        class="embed embed--doc"
+        class="embed embed--notes"
         :style="{ flexGrow: docFlex, flexBasis: '0%' }"
       >
-        <span class="embed__label">Document</span>
-        <iframe
-          ref="docIframeRef"
-          class="embed__frame"
-          :src="docUrl"
-          title="Project Google Document"
-          frameborder="0"
-          tabindex="0"
-        ></iframe>
+        <span class="embed__label">Notes</span>
+        <textarea
+          ref="notesTextareaRef"
+          v-model="notesContent"
+          class="embed__notes-input"
+          aria-label="Research notes"
+          placeholder="Capture observations, decisions, and follow-ups..."
+          spellcheck="true"
+          autocomplete="off"
+          autocapitalize="sentences"
+          @keydown="handleNotesKeydown"
+          @blur="handleNotesBlur"
+        ></textarea>
       </div>
 
       <div
@@ -441,6 +541,7 @@ function toEmbeddedDocUrl(raw: string) {
   height: 100vh;
   background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
   color: #0f172a;
+  position: relative;
 }
 
 .sidebar {
@@ -456,10 +557,80 @@ function toEmbeddedDocUrl(raw: string) {
   overflow-y: auto;
 }
 
+.sidebar-toggle {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.25);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+  background: linear-gradient(135deg, #1e40af, #1d4ed8);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px rgba(30, 64, 175, 0.35);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 3px solid rgba(129, 140, 248, 0.7);
+  outline-offset: 2px;
+}
+
 .sidebar__group {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.sidebar__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sidebar__collapse-button {
+  margin-left: auto;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.sidebar__collapse-button:hover {
+  background: rgba(37, 99, 235, 0.16);
+  color: #1e3a8a;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.18);
+  transform: translateY(-1px);
+}
+
+.sidebar__collapse-button:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
 }
 
 .sidebar__title {
@@ -472,6 +643,13 @@ function toEmbeddedDocUrl(raw: string) {
   margin: 0;
   color: #475569;
   font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.sidebar__note {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.8rem;
   line-height: 1.4;
 }
 
@@ -520,6 +698,28 @@ function toEmbeddedDocUrl(raw: string) {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
 
+.sidebar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1d4ed8;
+  text-decoration: none;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.sidebar__link:hover {
+  color: #1e3a8a;
+  transform: translateY(-1px);
+}
+
+.sidebar__link:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+  border-radius: 0.35rem;
+}
+
 .content {
   flex: 1;
   display: flex;
@@ -563,7 +763,28 @@ function toEmbeddedDocUrl(raw: string) {
   border: none;
 }
 
-.embed__frame:focus-visible {
+.embed__notes-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 2.5rem 1.5rem 1.5rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  font-size: 1rem;
+  line-height: 1.65;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.embed__notes-input::placeholder {
+  color: rgba(15, 23, 42, 0.48);
+}
+
+.embed__frame:focus-visible,
+.embed__notes-input:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.6);
   outline-offset: 0;
 }
@@ -609,6 +830,22 @@ function toEmbeddedDocUrl(raw: string) {
     border-bottom: 1px solid rgba(15, 23, 42, 0.08);
     flex-direction: column;
     padding: 0.75rem 1rem;
+  }
+
+  .sidebar-toggle {
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.5rem 0.85rem;
+  }
+
+  .sidebar__group-header {
+    gap: 0.5rem;
+  }
+
+  .sidebar__collapse-button {
+    width: 100%;
+    margin-left: 0;
+    justify-content: center;
   }
 
   .content {
