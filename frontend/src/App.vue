@@ -88,6 +88,70 @@ async function copyTimestampToClipboard() {
   }
 }
 
+function formatTimestampForNotes(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+    return '[00:00]'
+  }
+
+  const totalSeconds = Math.max(0, Math.floor(seconds))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const secs = totalSeconds % 60
+
+  const minutesText = String(minutes).padStart(2, '0')
+  const secondsText = String(secs).padStart(2, '0')
+  const parts = hours > 0 ? [String(hours), minutesText, secondsText] : [minutesText, secondsText]
+
+  return `[${parts.join(':')}]`
+}
+
+function insertTimestampedLineBreak() {
+  const textarea = notesTextareaRef.value
+  if (!textarea) return
+
+  const timestampLabel = formatTimestampForNotes(player?.getCurrentTime())
+
+  const start = textarea.selectionStart ?? 0
+  const end = textarea.selectionEnd ?? start
+  const value = textarea.value
+  const scrollPosition = textarea.scrollTop
+
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const precedingChar = start > 0 ? value[start - 1] : ''
+  const followingChar = after.charAt(0)
+  const needsLeadingNewline =
+    start > 0 && precedingChar !== '\n' && precedingChar !== '\r'
+  const needsTrailingNewline =
+    after.length > 0 && followingChar !== '\n' && followingChar !== '\r'
+  const timestampWithSpace = `${timestampLabel} `
+
+  const insertion = `${needsLeadingNewline ? '\n' : ''}${timestampWithSpace}${needsTrailingNewline ? '\n' : ''}`
+  const newValue = `${before}${insertion}${after}`
+
+  notesContent.value = newValue
+  textarea.value = newValue
+
+  const caretPosition =
+    before.length + (needsLeadingNewline ? 1 : 0) + timestampWithSpace.length
+
+  requestAnimationFrame(() => {
+    textarea.setSelectionRange(caretPosition, caretPosition)
+    textarea.scrollTop = scrollPosition
+  })
+
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+function handleNotesKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
+    return
+  }
+
+  event.preventDefault()
+  insertTimestampedLineBreak()
+}
+
 function focusNotes() {
   const textarea = notesTextareaRef.value
   if (!textarea) return
@@ -390,7 +454,8 @@ function toggleSidebar() {
           selected.
         </p>
         <p class="sidebar__note">
-          Press <kbd>Alt</kbd> + <kbd>P</kbd> to play or pause the video without leaving the notes area.
+          Press <kbd>Enter</kbd> to start a new line with the current timestamp automatically. Use
+          <kbd>Alt</kbd> + <kbd>P</kbd> to play or pause the video without leaving the notes area.
           Pausing still copies the current timestamp to your clipboard.
         </p>
       </section>
@@ -432,6 +497,7 @@ function toggleSidebar() {
           spellcheck="true"
           autocomplete="off"
           autocapitalize="sentences"
+          @keydown="handleNotesKeydown"
           @blur="handleNotesBlur"
         ></textarea>
       </div>
