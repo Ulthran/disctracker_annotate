@@ -6,7 +6,7 @@ const MAX_DOC_FLEX = 0.8
 
 const SIDEBAR_ID = 'workspace-sidebar'
 
-const docIframeRef = ref<HTMLIFrameElement | null>(null)
+const notesTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const youtubeIframeRef = ref<HTMLIFrameElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 let player: YT.Player | null = null
@@ -16,14 +16,10 @@ type YouTubeLinkInfo = {
   startSeconds: number
 }
 
-const DEFAULT_DOC_URL =
-  'https://docs.google.com/document/d/1-RxEnSPYk5Nt6QIzDxjhDam1ktuj9t8HTTmTtGm_v3k/edit?tab=t.0'
 const DEFAULT_VIDEO_URL =
   'https://www.youtube.com/watch?v=QQlyrXdStK0&t=831s&pp=ygUQdWx0aW1hdGUgZnJpc2JlZQ%3D%3D'
 
-const docUrl = ref(toEmbeddedDocUrl(DEFAULT_DOC_URL))
-const docUrlInput = ref(DEFAULT_DOC_URL)
-const currentDocSourceUrl = computed(() => docUrlInput.value || DEFAULT_DOC_URL)
+const notesContent = ref('')
 
 const currentVideoId = ref('QQlyrXdStK0')
 const currentVideoStartSeconds = ref(831)
@@ -92,17 +88,33 @@ async function copyTimestampToClipboard() {
   }
 }
 
-function focusArea(target: 'doc' | 'video') {
-  if (target === 'doc') {
-    const iframe = docIframeRef.value
-    if (!iframe) return
+function focusNotes() {
+  const textarea = notesTextareaRef.value
+  if (!textarea) return
 
-    iframe.focus()
+  requestAnimationFrame(() => {
+    const activeTextarea = notesTextareaRef.value
+    if (!activeTextarea) return
     try {
-      iframe.contentWindow?.focus()
+      activeTextarea.focus({ preventScroll: true })
     } catch (error) {
-      // Accessing contentWindow focus may fail for cross-origin iframes; ignore.
+      activeTextarea.focus()
     }
+  })
+}
+
+function handleNotesBlur() {
+  requestAnimationFrame(() => {
+    const activeElement = document.activeElement as HTMLElement | null
+    if (!activeElement || activeElement === document.body) {
+      focusNotes()
+    }
+  })
+}
+
+function focusArea(target: 'notes' | 'video') {
+  if (target === 'notes') {
+    focusNotes()
     return
   }
 
@@ -111,12 +123,19 @@ function focusArea(target: 'doc' | 'video') {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.altKey && event.key === '1') {
+  const key = event.key.toLowerCase()
+  if (!event.altKey) return
+
+  if (key === '1') {
     event.preventDefault()
-    focusArea('doc')
-  } else if (event.altKey && event.key === '2') {
+    focusArea('notes')
+  } else if (key === '2') {
     event.preventDefault()
     focusArea('video')
+  } else if (key === 'p') {
+    event.preventDefault()
+    toggleVideoPlayback()
+    focusNotes()
   }
 }
 
@@ -187,11 +206,15 @@ function cueOrLoadVideo(autoplay: boolean) {
   }
 }
 
-function submitDocUrl() {
-  const next = docUrlInput.value.trim()
-  const chosen = next || DEFAULT_DOC_URL
-  docUrl.value = toEmbeddedDocUrl(chosen)
-  docUrlInput.value = chosen
+function toggleVideoPlayback() {
+  if (!player || !playerReady.value) return
+
+  const state = player.getPlayerState()
+  if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
+    player.pauseVideo()
+  } else {
+    player.playVideo()
+  }
 }
 
 function submitVideoUrl() {
@@ -237,6 +260,7 @@ const videoEmbedSrc = computed(() => {
 const videoFlex = computed(() => 1 - docFlex.value)
 
 onMounted(async () => {
+  focusNotes()
   await loadYouTubeAPI()
   initYouTubePlayer()
   window.addEventListener('keydown', handleKeydown)
@@ -326,27 +350,6 @@ function toggleSidebar() {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
 }
 
-function toEmbeddedDocUrl(raw: string) {
-  try {
-    const url = new URL(raw)
-    const docMatch = url.pathname.match(/\/document(?:\/u\/\d+)?\/d\/([\w-]+)/)
-    if (docMatch) {
-      const docId = docMatch[1]
-      const hash = url.hash ?? ''
-      const embedUrl = new URL(`https://docs.google.com/document/d/${docId}/preview`)
-      url.searchParams.forEach((value, key) => {
-        if (key !== 'rm') {
-          embedUrl.searchParams.set(key, value)
-        }
-      })
-      embedUrl.searchParams.set('rm', 'minimal')
-      return `${embedUrl.toString()}${hash}`
-    }
-    return raw
-  } catch (error) {
-    return raw
-  }
-}
 </script>
 
 <template>
@@ -382,42 +385,21 @@ function toEmbeddedDocUrl(raw: string) {
           </button>
         </div>
         <p class="sidebar__text">
-          Use <kbd>Alt</kbd> + <kbd>1</kbd> to focus the document. Paste a Google Doc link and press
-          <kbd>Enter</kbd> to refresh the embed.
+          Start typing in the notes panel below. Use <kbd>Alt</kbd> + <kbd>1</kbd> anytime to return your
+          cursor to the notes field—the workspace will also refocus it automatically if nothing else is
+          selected.
         </p>
         <p class="sidebar__note">
-          Google Docs only allows read-only previews inside the workspace—Google blocks editing views
-          from loading in embedded frames, so use the link below to edit in a new tab if you need to
-          make changes.
+          Press <kbd>Alt</kbd> + <kbd>P</kbd> to play or pause the video without leaving the notes area.
+          Pausing still copies the current timestamp to your clipboard.
         </p>
-        <form class="sidebar__form" @submit.prevent="submitDocUrl">
-          <label class="sr-only" for="doc-url-input">Google Doc URL</label>
-          <input
-            id="doc-url-input"
-            v-model="docUrlInput"
-            class="sidebar__input"
-            type="url"
-            placeholder="https://docs.google.com/..."
-            inputmode="url"
-            spellcheck="false"
-          />
-          <button class="sidebar__button" type="submit">Load document</button>
-        </form>
-        <a
-          class="sidebar__link"
-          :href="currentDocSourceUrl"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Open in Google Docs
-        </a>
       </section>
 
       <section class="sidebar__group">
         <h2 class="sidebar__title">Reference Video</h2>
         <p class="sidebar__text">
-          Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the player. Pause with <kbd>k</kbd> or <kbd>space</kbd> to copy
-          the current timestamp.
+          Use <kbd>Alt</kbd> + <kbd>2</kbd> to focus the player. You can also press <kbd>Alt</kbd> + <kbd>P</kbd>
+          from the notes field to toggle playback.
         </p>
         <form class="sidebar__form" @submit.prevent="submitVideoUrl">
           <label class="sr-only" for="video-url-input">YouTube URL</label>
@@ -437,18 +419,21 @@ function toEmbeddedDocUrl(raw: string) {
 
     <section ref="contentRef" class="content">
       <div
-        class="embed embed--doc"
+        class="embed embed--notes"
         :style="{ flexGrow: docFlex, flexBasis: '0%' }"
       >
-        <span class="embed__label">Document</span>
-        <iframe
-          ref="docIframeRef"
-          class="embed__frame"
-          :src="docUrl"
-          title="Project Google Document"
-          frameborder="0"
-          tabindex="0"
-        ></iframe>
+        <span class="embed__label">Notes</span>
+        <textarea
+          ref="notesTextareaRef"
+          v-model="notesContent"
+          class="embed__notes-input"
+          aria-label="Research notes"
+          placeholder="Capture observations, decisions, and follow-ups..."
+          spellcheck="true"
+          autocomplete="off"
+          autocapitalize="sentences"
+          @blur="handleNotesBlur"
+        ></textarea>
       </div>
 
       <div
@@ -712,7 +697,28 @@ function toEmbeddedDocUrl(raw: string) {
   border: none;
 }
 
-.embed__frame:focus-visible {
+.embed__notes-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 2.5rem 1.5rem 1.5rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  font-size: 1rem;
+  line-height: 1.65;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.embed__notes-input::placeholder {
+  color: rgba(15, 23, 42, 0.48);
+}
+
+.embed__frame:focus-visible,
+.embed__notes-input:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.6);
   outline-offset: 0;
 }
